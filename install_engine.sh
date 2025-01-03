@@ -327,8 +327,21 @@ EOL
 sudo docker compose up -d
 
 # Clean up the install directory
-sudo rm $BASE_DIR/VHost.xml $BASE_DIR/Server.xml $BASE_DIR/tomcat.properties
-sudo rm $BUILD_DIR/Dockerfile
+if [ -f "$BASE_DIR/VHost.xml" ]; then
+  sudo rm "$BASE_DIR/VHost.xml"
+fi
+
+if [ -f "$BASE_DIR/Server.xml" ]; then
+  sudo rm "$BASE_DIR/Server.xml"
+fi
+
+if [ -f "$BASE_DIR/tomcat.properties" ]; then
+  sudo rm "$BASE_DIR/tomcat.properties"
+fi
+
+if [ -f "$BUILD_DIR/Dockerfile" ]; then
+  sudo rm "$BUILD_DIR/Dockerfile"
+fi
 
 # Get the public IP address
 public_ip=$(curl -s ifconfig.me)
