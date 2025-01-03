@@ -341,6 +341,10 @@ echo "
 To stop WSE, type: sudo docker compose -f $COMPOSE_DIR/docker-compose.yml down
 
 "
+echo "
+Check $BUILD_DIR for Engine Logs and contents directories
+
+"
 if [ -n "$jks_domain" ]; then
   echo "To connect to Wowza Streaming Engine Manager over SSL, go to: https://${jks_domain}:8090/enginemanager"
 else
