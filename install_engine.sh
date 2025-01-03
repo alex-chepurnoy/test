@@ -242,6 +242,25 @@ fi
 sed -i 's|<HandlerThreadPool>.*</HandlerThreadPool>|<HandlerThreadPool><PoolSize>'"$handler_pool_size"'</PoolSize></HandlerThreadPool>|' "$BASE_DIR/Server.xml"
 sed -i 's|<TransportThreadPool>.*</TransportThreadPool>|<TransportThreadPool><PoolSize>'"$transport_pool_size"'</PoolSize></TransportThreadPool>|' "$BASE_DIR/Server.xml"
 
+# Configure Demo live stream
+read -p "Do you want to add a demo live stream on Engine? (y/n): " demo_stream
+if [ "$demo_stream" = "y" ]; then
+  echo "   -----Adding demo live stream myStream to the Engine-----"
+  # Create a demo live stream
+  sed -i '/<\/ServerListeners>/i \
+            <ServerListener>\
+              <BaseClass>com.wowza.wms.module.ServerListenerStreamDemoPublisher</BaseClass>\
+            </ServerListener>' "$BASE_DIR/Server.xml"
+  
+  # Find the line number of the closing </Properties> tag directly above the closing </Server> tag
+line_number=$(awk '/<\/Properties>/ {p=NR} /<\/Server>/ && p {print p; exit}' "$BASE_DIR/Server.xml")
+
+# Insert the new property at the found line number
+if [ -n "$line_number" ]; then
+  sed -i "${line_number}i <Property>\n<Name>streamDemoPublisherConfig</Name>\n<Value>appName=live,srcStream=sample.mp4,dstStream=myStream,sendOnMetadata=true</Value>\n<Type>String</Type>\n</Property>" "$BASE_DIR/Server.xml"
+fi
+fi
+
 # Change directory to $BUILD_DIR/
 cd "$BUILD_DIR"
 
