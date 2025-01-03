@@ -217,13 +217,13 @@ EOL
 done
 
 # Server Tuning #
+echo "   -----Tuning Network Sockets and Server Threads-----"
 # Change ReceiveBufferSize and SendBufferSize values to 0 for <NetConnections> and <MediaCasters>
 sed -i 's|<ReceiveBufferSize>.*</ReceiveBufferSize>|<ReceiveBufferSize>0</ReceiveBufferSize>|g' "$BASE_DIR/VHost.xml"
 sed -i 's|<SendBufferSize>.*</SendBufferSize>|<SendBufferSize>0</SendBufferSize>|g' "$BASE_DIR/VHost.xml"
 
 # Check CPU thread count
 cpu_thread_count=$(nproc)
-echo "CPU Thread Count: $cpu_thread_count"
 
 # Calculate pool sizes with limits
 handler_pool_size=$((cpu_thread_count * 60))
@@ -279,19 +279,21 @@ fi
 # Build the Docker image from specified version
 sudo docker build . -t wowza_engine:$engine_version
 
-# Check if $COMPOSE_DIR/ directory exists, if not create it
-COMPOSE_DIR="$BUILD_DIR/EngineCompose/"
+# Check if $COMPOSE_DIR directory exists, if not create it
+COMPOSE_DIR="$BUILD_DIR/EngineCompose"
 mkdir -p "$COMPOSE_DIR"
 
 # Change directory to $COMPOSE_DIR
 cd "$COMPOSE_DIR"
 
-# Create .env file and prompt the user for input
+# Prompt user for Wowza Streaming Engine Manager credentials and license key
 read -p "Provide Wowza username: " WSE_MGR_USER
 read -s -p "Provide Wowza password: " WSE_MGR_PASS
 echo
 read -p "Provide Wowza license key: " WSE_LIC
 echo
+
+# Create .env file
 cat <<EOL > .env
 WSE_MGR_USER=${WSE_MGR_USER}
 WSE_MGR_PASS=${WSE_MGR_PASS}
@@ -324,7 +326,18 @@ services:
 EOL
 
 # Run docker compose up
+echo "Running docker compose up..."
 sudo docker compose up -d
+
+# Wait for the services to start and print logs
+echo "Waiting for services to start..."
+sleep 3  # Adjust the sleep time as needed
+
+echo "Printing docker compose logs..."
+sudo docker compose logs
+
+# Clean up the install directory
+echo "Cleaning up the install directory..."
 
 # Clean up the install directory
 if [ -f "$BASE_DIR/VHost.xml" ]; then
@@ -335,12 +348,12 @@ if [ -f "$BASE_DIR/Server.xml" ]; then
   sudo rm "$BASE_DIR/Server.xml"
 fi
 
-if [ -f "$BASE_DIR/tomcat.properties" ]; then
-  sudo rm "$BASE_DIR/tomcat.properties"
-fi
-
 if [ -f "$BUILD_DIR/Dockerfile" ]; then
   sudo rm "$BUILD_DIR/Dockerfile"
+fi
+
+if [ -f "$BASE_DIR/tomcat.properties" ]; then
+  sudo rm "$BASE_DIR/tomcat.properties"
 fi
 
 # Get the public IP address
