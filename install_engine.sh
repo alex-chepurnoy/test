@@ -3,95 +3,100 @@
 # Get the directory of the script
 SCRIPT_DIR=$(dirname "$0")
 
-# Check if Docker is installed
-  echo "   -----Checking if Docker is installed-----"
-
-if ! command -v docker &> /dev/null; then
-  sleep .5
+# Function to install Docker
+install_docker() {
   echo "   -----Docker not found, starting Docker installation-----"
-  sleep .5
-  # Add Docker's official GPG key:
-  echo "   -----Adding Docker's official GPG key-----"
-  sleep .5
   sudo apt-get update
   sudo apt-get install -y ca-certificates curl
   sudo install -m 0755 -d /etc/apt/keyrings
   sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   sudo chmod a+r /etc/apt/keyrings/docker.asc
-
-  # Add the repository to Apt sources:
-  echo "   -----Adding Docker repository to apt sources-----"
-  sleep .5
-  echo \
-    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-    sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
   sudo apt-get update
-
-  echo "   -----Installing Docker-----"
-  sleep .5
   sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  echo "   -----Docker Installation complete-----"
+}
 
-  echo "   -----Docker Installation complete, starting Wowza Streaming Engine installation-----"
-  sleep .5
+# Function to install jq
+install_jq() {
+  echo "   -----jq not found, installing jq-----"
+  sudo apt-get install -y jq > /dev/null 2>&1
+}
+
+# Check if Docker is installed
+echo "   -----Checking if Docker is installed-----"
+if ! command -v docker &> /dev/null; then
+  install_docker
 else
-  echo "   -----Docker found, installing Wowza Streaming Engine-----"
+  echo "   -----Docker found-----"
 fi
 
 # Check if jq is installed
 if ! command -v jq &> /dev/null; then
-  echo "   -----jq not found, installing jq-----"
-  sudo apt-get install -y jq > /dev/null 2>&1
+  install_jq
 fi
 
-# Pull the 10 most recent versions of Wowza Engine from Docker and list them
-echo "
-Fetching the 10 most recent versions of Wowza Engine..."
-recent_versions=$(curl -s https://registry.hub.docker.com/v2/repositories/wowzamedia/wowza-streaming-engine-linux/tags | jq -r '.results[].name' | sort -r | head -n 10)
+# Fetch all available versions of Wowza Engine from Docker
+all_versions=""
+url="https://registry.hub.docker.com/v2/repositories/wowzamedia/wowza-streaming-engine-linux/tags"
+while [ -n "$url" ]; do
+  response=$(curl -s "$url")
+  tags=$(echo "$response" | jq -r '.results[] | "\(.name) \(.last_updated)"')
+  all_versions="$all_versions"$'\n'"$tags"
+  url=$(echo "$response" | jq -r '.next')
+done
 
-echo "$recent_versions"
+# Sort versions by date released
+sorted_versions=$(echo "$all_versions" | sort -k2 -r)
 
-# Prompt user for version of the engine
-read -p "Enter the version of the engine you want to build from the list above: " engine_version
+# Remove the date field and display only the version names
+sorted_versions=$(echo "$sorted_versions" | awk '{print $1}')
+echo "All available versions sorted by date released:"
+echo "$sorted_versions"
+
+# Prompt user for version of the engine and verify if it exists
+while true; do
+  read -p "Enter the version of the engine you want to build from the list above: " engine_version
+  if echo "$sorted_versions" | grep -q "^${engine_version}$"; then
+    break
+  else
+    echo "Error: The specified version ${engine_version} does not exist. Please enter a valid version from the list below:"
+    echo "$sorted_versions"
+  fi
+done
 
 # Define the build directory
 BUILD_DIR="$SCRIPT_DIR/dockerBuild"
-
-if [ ! -d "$BUILD_DIR" ]; then
-  mkdir -p "$BUILD_DIR"
-fi
+mkdir -p "$BUILD_DIR"
 
 # Check if base directory exists, if not create it and prompt the user to add files
 BASE_DIR="$BUILD_DIR/base"
-if [ ! -d "$BASE_DIR" ]; then
-  mkdir -p "$BASE_DIR"
-fi
-echo "
-***
-Please add/upload your .jks file to $BASE_DIR
-***"
+mkdir -p "$BASE_DIR"
+
+echo "*** Please add/upload your .jks file to $BASE_DIR ***"
 read -p "Press [Enter] to continue after uploading the files or type 'skip' to move to the next step: " user_input
-if [ "$user_input" == "skip" ]; then
+
+if [ "$user_input" != "skip" ]; then
   read -p "Press [Enter] to continue after uploading the files..."
 fi
 
-  # List files found in the directory
-  echo "Files found in $BASE_DIR:"
-  ls -1 "$BASE_DIR"
+# List files found in the directory
+echo "Files found in $BASE_DIR:"
+ls -1 "$BASE_DIR"
 
-  # Find the .jks file
-    jks_file=$(ls "$BASE_DIR"/*.jks 2>/dev/null | head -n 1)
-    if [ -z "$jks_file" ]; then
-      echo "No .jks file found. Continuing to the next step."
-    else
-      jks_file=$(basename "$jks_file")
-      read -p "Provide the domain for .jks file (e.g., myWowzaDomain.com): " jks_domain
-      read -s -p "Please enter the .jks password (to establihs https connection to Wowza Manager): " jks_password
-    fi
-
-# Create tomcat.properties file for HTTPS access to Wowza Streaming Engine Manager if there is a .jks file
+# Find the .jks file
+jks_file=$(ls "$BASE_DIR"/*.jks 2>/dev/null | head -n 1)
 if [ -z "$jks_file" ]; then
-cat <<EOL > "$BASE_DIR/tomcat.properties"
+  echo "No .jks file found. Continuing to the next step."
+else
+  jks_file=$(basename "$jks_file")
+  read -p "Provide the domain for .jks file (e.g., myWowzaDomain.com): " jks_domain
+  read -s -p "Please enter the .jks password (to establish https connection to Wowza Manager): " jks_password
+fi
+
+# Check if .jks file exists and create the tomcat.properties file if it does
+if [ -n "$jks_file" ]; then
+  cat <<EOL > "$BASE_DIR/tomcat.properties"
 httpsPort=8090
 httpsKeyStore=/usr/local/WowzaStreamingEngine/conf/${jks_file}
 httpsKeyStorePassword=${jks_password}
@@ -106,25 +111,29 @@ cd "$BUILD_DIR"
 cat <<EOL > Dockerfile
 FROM wowzamedia/wowza-streaming-engine-linux:${engine_version}
 
-COPY /base/tomcat.properties /usr/local/WowzaStreamingEngine/manager/conf/
-COPY /base/${jks_file} /usr/local/WowzaStreamingEngine/conf/
-
 RUN apt update
 RUN apt install nano
 
 WORKDIR /usr/local/WowzaStreamingEngine/
 EOL
 
+# Append COPY commands if the files exist
+if [ -f "$BASE_DIR/tomcat.properties" ]; then
+  echo "COPY /base/tomcat.properties /usr/local/WowzaStreamingEngine/manager/conf/" >> Dockerfile
+fi
+
+if [ -n "$jks_file" ] && [ -f "$BASE_DIR/$jks_file" ]; then
+  echo "COPY /base/${jks_file} /usr/local/WowzaStreamingEngine/conf/" >> Dockerfile
+fi
+
 # Build the Docker image from specified version
 sudo docker build . -t wowza_engine:$engine_version
 
 # Check if $BUILD_DIR/Engine/ directory exists, if not create it
-if [ ! -d "$BUILD_DIR/Engine/" ]; then
-  mkdir -p $BUILD_DIR/Engine/
-fi
+mkdir -p "$BUILD_DIR/Engine/"
 
 # Change directory to $BUILD_DIR/Engine
-cd $BUILD_DIR/Engine
+cd "$BUILD_DIR/Engine"
 
 # Create .env file and prompt the user for input
 read -p "Provide Wowza username: " WSE_MGR_USER
@@ -138,7 +147,7 @@ WSE_MGR_PASS=${WSE_MGR_PASS}
 WSE_LIC=${WSE_LIC}
 EOL
 
-# Check if docker-compose.yml is already present, if not create it
+# Create docker-compose.yml
 cat <<EOL > docker-compose.yml
 services:
   wowza:
@@ -152,8 +161,8 @@ services:
       - "554:554"
       - "8084-8090:8084-8090/tcp"
     volumes:
-      - /home/ubuntu/DockerWSELogs:/usr/local/WowzaStreamingEngine/logs
-      - /home/ubuntu/DockerWSEcontent:/usr/local/WowzaStreamingEngine/content
+      - $BUILD_DIR/DockerWSELogs:/usr/local/WowzaStreamingEngine/logs
+      - $BUILD_DIR/DockerWSEcontent:/usr/local/WowzaStreamingEngine/content
     entrypoint: /sbin/entrypoint.sh
     env_file: 
       - ./.env
@@ -167,20 +176,24 @@ EOL
 sudo docker compose up -d
 
 # Change directory to $BUILD_DIR/Engine
-cd $BUILD_DIR/Engine
+cd "$BUILD_DIR/Engine"
 
 # Get the public IP address
 public_ip=$(curl -s ifconfig.me)
+
+# Get the private IP address
+private_ip=$(ifconfig | grep 'inet ' | grep -v 127.0.0.1 | awk '{print $2}' | head -n 1)
 
 # Print instructions to stop WSE and connect to Wowza Streaming Engine Manager
 echo "
 To stop WSE, type: sudo docker compose down
 "
 if [ -n "$jks_domain" ]; then
-  echo "To connect to Wowza Streaming Engine Manager, go to: https://${jks_domain}:8090/enginemanager"
+  echo "To connect to Wowza Streaming Engine Manager over SSL, go to: https://${jks_domain}:8090/enginemanager"
 else
-  echo "To connect to Wowza Streaming Engine Manager, go to: http://$public_ip:8088/enginemanager"
+  echo "To connect to Wowza Streaming Engine Manager via public IP, go to: http://$public_ip:8088/enginemanager"
+  echo "To connect to Wowza Streaming Engine Manager via private IP, go to: http://$private_ip:8088/enginemanager"
 fi
 
 # Change directory to $BUILD_DIR/Engine
-cd $BUILD_DIR/Engine
+cd "$BUILD_DIR/Engine/"
