@@ -66,12 +66,24 @@ while true; do
 done
 
 # Define the build directory
-BUILD_DIR="$SCRIPT_DIR/dockerBuild"
+BUILD_DIR="$SCRIPT_DIR/DockerEngineInstaller"
 mkdir -p "$BUILD_DIR"
 
 # Check if base directory exists, if not create it and prompt the user to add files
-BASE_DIR="$BUILD_DIR/base"
+BASE_DIR="$BUILD_DIR/base_files"
 mkdir -p "$BASE_DIR"
+
+## Create the Server.xml and VHost.xml files
+echo "   -----Creating Server.xml and VHost.xml for SSL file-----"
+# Create a temporary container from the image
+sudo docker run -d --name temp_container --entrypoint /sbin/entrypoint.sh wowzamedia/wowza-streaming-engine-linux:${engine_version} > /dev/null
+
+# Copy the VHost.xml file from the container to the host
+sudo docker cp temp_container:/usr/local/WowzaStreamingEngine/conf/VHost.xml "$BASE_DIR/VHost.xml"
+sudo docker cp temp_container:/usr/local/WowzaStreamingEngine/conf/Server.xml "$BASE_DIR/Server.xml"
+
+# Remove the temporary container
+sudo docker rm -f temp_container > /dev/null
 
 while true; do
   read -p "Do you want to add your .jks file to $BASE_DIR? (y/n): " user_input
@@ -83,24 +95,116 @@ while true; do
       echo "Files found in $BASE_DIR:"
       ls -1 "$BASE_DIR"
 
-      # Find the .jks file
-      jks_file=$(ls "$BASE_DIR"/*.jks 2>/dev/null | head -n 1)
-      if [ -z "$jks_file" ]; then
-        echo "No .jks file found. Continuing to the next step."
-      else
-        jks_file=$(basename "$jks_file")
-        read -p "Provide the domain for .jks file (e.g., myWowzaDomain.com): " jks_domain
-        read -s -p "Please enter the .jks password (to establish https connection to Wowza Manager): " jks_password
-        echo
-        # Create the tomcat.properties file
-        cat <<EOL > "$BASE_DIR/tomcat.properties"
+      while true; do
+        # Find the .jks file
+        jks_file=$(ls "$BASE_DIR"/*.jks 2>/dev/null | head -n 1)
+        if [ -z "$jks_file" ]; then
+          read -p "No .jks file found. Would you like to upload again? (y/n): " upload_again
+          case $upload_again in
+            [Yy]* )
+              read -p "Press [Enter] to continue after uploading the files..."
+              ;;
+            [Nn]* )
+              echo "You chose not to add a .jks file."
+              break 2
+              ;;
+            * )
+              echo "Please answer yes or no."
+              ;;
+          esac
+        else
+          jks_file=$(basename "$jks_file")
+          read -p "Provide the domain for .jks file (e.g., myWowzaDomain.com): " jks_domain
+          read -s -p "Please enter the .jks password (to establish https connection to Wowza Manager): " jks_password
+          echo
+
+          # Setup Engine to use SSL for streaming and Manager access #
+          # Create the tomcat.properties file
+          echo "   -----Creating tomcat.properties file-----"
+          cat <<EOL > "$BASE_DIR/tomcat.properties"
 httpsPort=8090
 httpsKeyStore=/usr/local/WowzaStreamingEngine/conf/${jks_file}
 httpsKeyStorePassword=${jks_password}
 #httpsKeyAlias=[key-alias]
 EOL
-      fi
-      break
+
+          # Change the <Port> line to have only 1935,554 ports
+          sed -i 's|<Port>1935,80,443,554</Port>|<Port>1935,554</Port>|' "$BASE_DIR/VHost.xml"
+          
+          # Edit the VHost.xml file to include the new HostPort block with the JKS and password information
+          sed -i '/<\/HostPortList>/i \
+          <HostPort>\
+              <Name>Autoconfig SSL Streaming</Name>\
+              <Type>Streaming</Type>\
+              <ProcessorCount>\${com.wowza.wms.TuningAuto}</ProcessorCount>\
+              <IpAddress>*</IpAddress>\
+              <Port>443</Port>\
+              <HTTPIdent2Response></HTTPIdent2Response>\
+              <SSLConfig>\
+                  <KeyStorePath>/usr/local/WowzaStreamingEngine/conf/'${jks_file}'</KeyStorePath>\
+                  <KeyStorePassword>'${jks_password}'</KeyStorePassword>\
+                  <KeyStoreType>JKS</KeyStoreType>\
+                  <DomainToKeyStoreMapPath></DomainToKeyStoreMapPath>\
+                  <SSLProtocol>TLS</SSLProtocol>\
+                  <Algorithm>SunX509</Algorithm>\
+                  <CipherSuites></CipherSuites>\
+                  <Protocols></Protocols>\
+                  <AllowHttp2>true</AllowHttp2>\
+              </SSLConfig>\
+              <SocketConfiguration>\
+                  <ReuseAddress>true</ReuseAddress>\
+                  <ReceiveBufferSize>65000</ReceiveBufferSize>\
+                  <ReadBufferSize>65000</ReadBufferSize>\
+                  <SendBufferSize>65000</SendBufferSize>\
+                  <KeepAlive>true</KeepAlive>\
+                  <AcceptorBackLog>100</AcceptorBackLog>\
+              </SocketConfiguration>\
+              <HTTPStreamerAdapterIDs>cupertinostreaming,smoothstreaming,sanjosestreaming,dvrchunkstreaming,mpegdashstreaming</HTTPStreamerAdapterIDs>\
+              <HTTPProviders>\
+                  <HTTPProvider>\
+                      <BaseClass>com.wowza.wms.http.HTTPCrossdomain</BaseClass>\
+                      <RequestFilters>*crossdomain.xml</RequestFilters>\
+                      <AuthenticationMethod>none</AuthenticationMethod>\
+                  </HTTPProvider>\
+                  <HTTPProvider>\
+                      <BaseClass>com.wowza.wms.http.HTTPClientAccessPolicy</BaseClass>\
+                      <RequestFilters>*clientaccesspolicy.xml</RequestFilters>\
+                      <AuthenticationMethod>none</AuthenticationMethod>\
+                  </HTTPProvider>\
+                  <HTTPProvider>\
+                      <BaseClass>com.wowza.wms.http.HTTPProviderMediaList</BaseClass>\
+                      <RequestFilters>*jwplayer.rss|*jwplayer.smil|*medialist.smil|*manifest-rtmp.f4m</RequestFilters>\
+                      <AuthenticationMethod>none</AuthenticationMethod>\
+                  </HTTPProvider>\
+                  <HTTPProvider>\
+                      <BaseClass>com.wowza.wms.webrtc.http.HTTPWebRTCExchangeSessionInfo</BaseClass>\
+                      <RequestFilters>*webrtc-session.json</RequestFilters>\
+                      <AuthenticationMethod>none</AuthenticationMethod>\
+                  </HTTPProvider>\
+                  <HTTPProvider>\
+                      <BaseClass>com.wowza.wms.http.HTTPServerVersion</BaseClass>\
+                      <RequestFilters>*ServerVersion</RequestFilters>\
+                      <AuthenticationMethod>none</AuthenticationMethod>\
+                  </HTTPProvider>\
+              </HTTPProviders>\
+          </HostPort>' "$BASE_DIR/VHost.xml"
+
+          # Edit the VHost.xml file to include the new TestPlayer block with the jks_domain
+          sed -i '/<\/Manager>/i \
+          <TestPlayer>\
+              <IpAddress>'${jks_domain}'</IpAddress>\
+              <Port>443</Port>\
+              <SSLEnable>true</SSLEnable>\
+          </TestPlayer>' "$BASE_DIR/VHost.xml"
+          
+          # Edit the Server.xml file to include the JKS and password information
+          sed -i 's|<Enable>false</Enable>|<Enable>true</Enable>|' "$BASE_DIR/Server.xml"
+          sed -i 's|<KeyStorePath></KeyStorePath>|<KeyStorePath>/usr/local/WowzaStreamingEngine/conf/'${jks_file}'</KeyStorePath>|' "$BASE_DIR/Server.xml"
+          sed -i 's|<KeyStorePassword></KeyStorePassword>|<KeyStorePassword>'${jks_password}'</KeyStorePassword>|' "$BASE_DIR/Server.xml"
+          sed -i 's|<IPWhiteList>127.0.0.1</IPWhiteList>|<IPWhiteList>*</IPWhiteList>|' "$BASE_DIR/Server.xml"
+          break 2
+        fi
+      done
       ;;
     [Nn]* )
       echo "You chose not to add a .jks file."
@@ -111,6 +215,32 @@ EOL
       ;;
   esac
 done
+
+# Server Tuning #
+# Change ReceiveBufferSize and SendBufferSize values to 0 for <NetConnections> and <MediaCasters>
+sed -i 's|<ReceiveBufferSize>.*</ReceiveBufferSize>|<ReceiveBufferSize>0</ReceiveBufferSize>|g' "$BASE_DIR/VHost.xml"
+sed -i 's|<SendBufferSize>.*</SendBufferSize>|<SendBufferSize>0</SendBufferSize>|g' "$BASE_DIR/VHost.xml"
+
+# Check CPU thread count
+cpu_thread_count=$(nproc)
+echo "CPU Thread Count: $cpu_thread_count"
+
+# Calculate pool sizes with limits
+handler_pool_size=$((cpu_thread_count * 60))
+transport_pool_size=$((cpu_thread_count * 40))
+
+# Apply limits
+if [ "$handler_pool_size" -gt 4096 ]; then
+  handler_pool_size=4096
+fi
+
+if [ "$transport_pool_size" -gt 4096 ]; then
+  transport_pool_size=4096
+fi
+
+# Update Server.xml with new pool sizes
+sed -i 's|<HandlerThreadPool>.*</HandlerThreadPool>|<HandlerThreadPool><PoolSize>'"$handler_pool_size"'</PoolSize></HandlerThreadPool>|' "$BASE_DIR/Server.xml"
+sed -i 's|<TransportThreadPool>.*</TransportThreadPool>|<TransportThreadPool><PoolSize>'"$transport_pool_size"'</PoolSize></TransportThreadPool>|' "$BASE_DIR/Server.xml"
 
 # Change directory to $BUILD_DIR/
 cd "$BUILD_DIR"
@@ -126,22 +256,35 @@ WORKDIR /usr/local/WowzaStreamingEngine/
 EOL
 
 # Append COPY commands if the files exist
-if [ -f "$BASE_DIR/tomcat.properties" ]; then
-  echo "COPY /base/tomcat.properties /usr/local/WowzaStreamingEngine/manager/conf/" >> Dockerfile
+if [ -n "$jks_file" ] && [ -f "$BASE_DIR/$jks_file" ]; then
+  echo "COPY base_files/${jks_file} /usr/local/WowzaStreamingEngine/conf/" >> Dockerfile
+  echo "RUN chown wowza:wowza /usr/local/WowzaStreamingEngine/conf/${jks_file}" >> Dockerfile
 fi
 
-if [ -n "$jks_file" ] && [ -f "$BASE_DIR/$jks_file" ]; then
-  echo "COPY /base/${jks_file} /usr/local/WowzaStreamingEngine/conf/" >> Dockerfile
+if [ -f "$BASE_DIR/tomcat.properties" ]; then
+  echo "COPY base_files/tomcat.properties /usr/local/WowzaStreamingEngine/manager/conf/" >> Dockerfile
+  echo "RUN chown wowza:wowza /usr/local/WowzaStreamingEngine/manager/conf/tomcat.properties" >> Dockerfile
+fi
+
+if [ -f "$BASE_DIR/Server.xml" ]; then
+  echo "COPY base_files/Server.xml /usr/local/WowzaStreamingEngine/conf/" >> Dockerfile
+  echo "RUN chown wowza:wowza /usr/local/WowzaStreamingEngine/conf/Server.xml" >> Dockerfile
+fi
+
+if [ -f "$BASE_DIR/VHost.xml" ]; then
+  echo "COPY base_files/VHost.xml /usr/local/WowzaStreamingEngine/conf/" >> Dockerfile
+  echo "RUN chown wowza:wowza /usr/local/WowzaStreamingEngine/conf/VHost.xml" >> Dockerfile
 fi
 
 # Build the Docker image from specified version
 sudo docker build . -t wowza_engine:$engine_version
 
-# Check if $BUILD_DIR/Engine/ directory exists, if not create it
-mkdir -p "$BUILD_DIR/Engine/"
+# Check if $COMPOSE_DIR/ directory exists, if not create it
+COMPOSE_DIR="$BUILD_DIR/EngineCompose/"
+mkdir -p "$COMPOSE_DIR"
 
-# Change directory to $BUILD_DIR/Engine
-cd "$BUILD_DIR/Engine"
+# Change directory to $COMPOSE_DIR
+cd "$COMPOSE_DIR"
 
 # Create .env file and prompt the user for input
 read -p "Provide Wowza username: " WSE_MGR_USER
@@ -183,8 +326,9 @@ EOL
 # Run docker compose up
 sudo docker compose up -d
 
-# Change directory to $BUILD_DIR/Engine
-cd "$BUILD_DIR/Engine"
+# Clean up the install directory
+sudo rm $BASE_DIR/VHost.xml $BASE_DIR/Server.xml $BASE_DIR/tomcat.properties
+sudo rm $BUILD_DIR/Dockerfile
 
 # Get the public IP address
 public_ip=$(curl -s ifconfig.me)
@@ -194,7 +338,8 @@ private_ip=$(ip addr show | grep 'inet ' | grep -v 127.0.0.1 | awk '{print $2}' 
 
 # Print instructions to stop WSE and connect to Wowza Streaming Engine Manager
 echo "
-To stop WSE, type: sudo docker compose down
+To stop WSE, type: sudo docker compose -f $COMPOSE_DIR/docker-compose.yml down
+
 "
 if [ -n "$jks_domain" ]; then
   echo "To connect to Wowza Streaming Engine Manager over SSL, go to: https://${jks_domain}:8090/enginemanager"
@@ -202,6 +347,3 @@ else
   echo "To connect to Wowza Streaming Engine Manager via public IP, go to: http://$public_ip:8088/enginemanager"
   echo "To connect to Wowza Streaming Engine Manager via private IP, go to: http://$private_ip:8088/enginemanager"
 fi
-
-# Change directory to $BUILD_DIR/Engine
-cd "$BUILD_DIR/Engine/"
