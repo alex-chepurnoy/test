@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Get the directory of the script
-SCRIPT_DIR=$(dirname "$0")
+SCRIPT_DIR=$(realpath $(dirname "$0"))
 
 # Function to install Docker
 install_docker() {
@@ -73,36 +73,44 @@ mkdir -p "$BUILD_DIR"
 BASE_DIR="$BUILD_DIR/base"
 mkdir -p "$BASE_DIR"
 
-echo "*** Please add/upload your .jks file to $BASE_DIR ***"
-read -p "Press [Enter] to continue after uploading the files or type 'skip' to move to the next step: " user_input
+while true; do
+  read -p "Do you want to add your .jks file to $BASE_DIR? (y/n): " user_input
 
-if [ "$user_input" != "skip" ]; then
-  read -p "Press [Enter] to continue after uploading the files..."
-fi
+  case $user_input in
+    [Yy]* )
+      read -p "Press [Enter] to continue after uploading the files..." 
+      # List files found in the directory
+      echo "Files found in $BASE_DIR:"
+      ls -1 "$BASE_DIR"
 
-# List files found in the directory
-echo "Files found in $BASE_DIR:"
-ls -1 "$BASE_DIR"
-
-# Find the .jks file
-jks_file=$(ls "$BASE_DIR"/*.jks 2>/dev/null | head -n 1)
-if [ -z "$jks_file" ]; then
-  echo "No .jks file found. Continuing to the next step."
-else
-  jks_file=$(basename "$jks_file")
-  read -p "Provide the domain for .jks file (e.g., myWowzaDomain.com): " jks_domain
-  read -s -p "Please enter the .jks password (to establish https connection to Wowza Manager): " jks_password
-fi
-
-# Check if .jks file exists and create the tomcat.properties file if it does
-if [ -n "$jks_file" ]; then
-  cat <<EOL > "$BASE_DIR/tomcat.properties"
+      # Find the .jks file
+      jks_file=$(ls "$BASE_DIR"/*.jks 2>/dev/null | head -n 1)
+      if [ -z "$jks_file" ]; then
+        echo "No .jks file found. Continuing to the next step."
+      else
+        jks_file=$(basename "$jks_file")
+        read -p "Provide the domain for .jks file (e.g., myWowzaDomain.com): " jks_domain
+        read -s -p "Please enter the .jks password (to establish https connection to Wowza Manager): " jks_password
+        echo
+        # Create the tomcat.properties file
+        cat <<EOL > "$BASE_DIR/tomcat.properties"
 httpsPort=8090
 httpsKeyStore=/usr/local/WowzaStreamingEngine/conf/${jks_file}
 httpsKeyStorePassword=${jks_password}
 #httpsKeyAlias=[key-alias]
 EOL
-fi
+      fi
+      break
+      ;;
+    [Nn]* )
+      echo "You chose not to add a .jks file."
+      break
+      ;;
+    * )
+      echo "Please answer yes or no."
+      ;;
+  esac
+done
 
 # Change directory to $BUILD_DIR/
 cd "$BUILD_DIR"
@@ -182,7 +190,7 @@ cd "$BUILD_DIR/Engine"
 public_ip=$(curl -s ifconfig.me)
 
 # Get the private IP address
-private_ip=$(ifconfig | grep 'inet ' | grep -v 127.0.0.1 | awk '{print $2}' | head -n 1)
+private_ip=$(ip addr show | grep 'inet ' | grep -v 127.0.0.1 | awk '{print $2}' | cut -d/ -f1 | head -n 1)
 
 # Print instructions to stop WSE and connect to Wowza Streaming Engine Manager
 echo "
